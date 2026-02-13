@@ -1,5 +1,6 @@
 import numpy as np
 import scipy
+from collections import deque
 
 class Grid:
     def __init__(self, N, config, density, game):
@@ -47,6 +48,66 @@ class Grid:
         total = np.zeros_like(self.lattice)
 
         for dx, dy in self.eight_shifts:
-            total += np.roll(np.roll(self.lattice, dx, axis=0), dy, axis=1)
+            total += np.roll(np.roll(self.lattice, dx, axis=0), dy, axis=1) # np.roll implementation (lecture 1)
 
         return total
+    
+class GameOfLife:
+    def __init__(self, grid, max_steps, eq_steps):
+        self.grid = grid # pass grid object (same logic as CP1)
+        self.grid.initialise_lattice()
+        self.history = deque(maxlen=eq_steps)
+        self.eq_time = None
+
+        self.max_steps = max_steps
+
+    def step(self):
+        """
+        Runs one step of the game of life over the entire grid.
+        """
+        neighbour_sum = self.grid.count_neighbours() # number of alive neighbouring cells
+    
+        # make use of boolean logic + union operator for quick vectorised operations
+        resurrected = (self.grid.lattice == 0) & (neighbour_sum == 3) # cell is resurrected if it is dead and has 3 alive neighbours
+        survive = (self.grid.lattice == 1) & ((neighbour_sum == 2) | (neighbour_sum == 3)) # cell survives if it is alive and has 2 or 3 alive neighbours
+
+        # store the boolean values of surviving/reborn cells
+        self.grid.lattice = (resurrected | survive).astype(int) # astype(int) means all-else becomes 0, i.e. the death condition is satisfied via an implicit else: condition
+
+    def equilibrium_state(self) -> bool:
+        """
+        Checks whether the game has reached an equilibrium state & defines which type it is.
+        """
+        # for first step
+        if len(self.history) == 0:
+            return False
+        
+        # absorbing state (check this FIRST)
+        if np.array_equal(self.grid.lattice, self.history[-1]):
+            print(f"Absorbing state reached.")
+            return True
+        
+        # oscillating state
+        if any(np.array_equal(self.grid.lattice, h) for h in self.history): # any() should not terminate travelling states in theory
+            print(f"Oscillating state reached.")
+            return True
+        
+        return False
+
+    def run(self):
+        """
+        Runs the game of life until the user-defined maximum number of steps is reached.
+        """
+        step_number = 0
+        while step_number < self.max_steps:
+            current_state = self.grid.lattice.copy() # from lecture 1, .copy() is necessary
+            self.history.append(current_state) 
+            self.step()
+            eq = self.equilibrium_state()
+            if eq:
+                self.eq_time = step_number
+                break
+            step_number += 1
+        if self.eq_time is None:
+            print(f"Did not equilibrate before reaching maximum steps.")
+            self.eq_time = self.max_steps
