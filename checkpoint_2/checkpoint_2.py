@@ -58,11 +58,16 @@ class GameOfLife:
     def __init__(self, grid, max_steps, eq_steps):
         self.grid = grid # pass grid object (same logic as CP1)
         self.grid.initialise_lattice()
-        self.history = deque(maxlen=eq_steps)
-        self.eq_time = None
 
+        self.history = deque(maxlen=eq_steps)
+
+        self.eq_time = None
+        self.equilibrated = False
         self.max_steps = max_steps
 
+        self.fig = None
+        self.ax = None
+        
     def step(self):
         """
         Runs one step of the game of life over the entire grid.
@@ -96,38 +101,59 @@ class GameOfLife:
         
         return False
 
-    def run(self):
+    def run(self, animate=False):
         """
         Runs the game of life until the user-defined maximum number of steps is reached.
         """
+        if animate:
+            plt.ion()
+            self.fig, self.ax = plt.subplots()
+            self.im = self.ax.imshow(self.grid.lattice, cmap='binary', interpolation='nearest')
+
         step_number = 0
         while step_number < self.max_steps:
-            current_state = self.grid.lattice.copy() # from lecture 1, .copy() is necessary
-            self.history.append(current_state) 
+            current_state = self.grid.lattice.copy()
+            self.history.append(current_state)
             self.step()
-            eq = self.equilibrium_state()
-            if eq:
+
+            if animate:
+                self.im.set_data(self.grid.lattice)
+                self.ax.set_title(f'Step: {step_number}')
+                plt.pause(0.01)
+
+            if not self.equilibrated and self.equilibrium_state():
                 self.eq_time = step_number
-                break
+                print(f"Reached equilibrium after {step_number} steps.")
+                self.equilibrated = True
             step_number += 1
+
         if self.eq_time is None:
-            print(f"Did not equilibrate before reaching maximum steps.")
+            print("Did not equilibrate.")
             self.eq_time = self.max_steps
 
-class Visualiser:
-    def __init__(self, updater, interval=50, cmap='binary'):
-        self.updater = updater
-        self.interval = interval
-        self.fig, self.ax = plt.subplots()
-        self.im = self.ax.imshow(updater.grid.lattice, cmap=cmap, interpolation='nearest')
+        if animate:
+            plt.ioff()
+            plt.show()
 
-    def _update(self, frame):
-        self.updater.step()
-        self.im.set_data(self.updater.grid.lattice)
-        self.ax.set_title(f'Step: {frame}')
-        return [self.im]
+def main():
+    """
+    main() function.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--N', type=int, default=50)
+    parser.add_argument('--density', type=float, default=0.5)
+    parser.add_argument('--max_steps', type=int, default=1000)
+    parser.add_argument('--animate', action='store_true')
+    parser.add_argument('--eq-steps', type=int, default=10)
+    args = parser.parse_args()
 
-    def animate(self):
-        ani = FuncAnimation(self.fig, self._update, frames=self.updater.max_steps, interval=self.interval, blit=True)
-        plt.show()
+    grid = Grid(N=args.N, config='random', density=args.density, game='GoL')
+    grid.initialise_lattice()
 
+    updater = GameOfLife(grid, max_steps=args.max_steps, eq_steps=args.eq_steps)
+
+    updater.run(animate=args.animate)
+    print(f"Equilibrium time: {updater.eq_time}")
+
+if __name__ == '__main__':
+    main()
