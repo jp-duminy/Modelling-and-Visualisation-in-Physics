@@ -1,6 +1,8 @@
 import numpy as np
-import scipy
+from matplotlib import pyplot as plt
+from matplotlib.animation import FuncAnimation
 from collections import deque
+import argparse
 
 class Grid:
     def __init__(self, N, config, density, game):
@@ -111,3 +113,21 @@ class GameOfLife:
         if self.eq_time is None:
             print(f"Did not equilibrate before reaching maximum steps.")
             self.eq_time = self.max_steps
+
+class Visualiser:
+    def __init__(self, updater, interval=50, cmap='binary'):
+        self.updater = updater
+        self.interval = interval
+        self.fig, self.ax = plt.subplots()
+        self.im = self.ax.imshow(updater.grid.lattice, cmap=cmap, interpolation='nearest')
+
+    def _update(self, frame):
+        self.updater.step()
+        self.im.set_data(self.updater.grid.lattice)
+        self.ax.set_title(f'Step: {frame}')
+        return [self.im]
+
+    def animate(self):
+        ani = FuncAnimation(self.fig, self._update, frames=self.updater.max_steps, interval=self.interval, blit=True)
+        plt.show()
+
