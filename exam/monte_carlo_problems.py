@@ -148,6 +148,128 @@ def kawasaki_sweep(lattice: np.ndarray, N: int, beta: float) -> None:
         if metropolis_acceptance(delta_E, beta):
             lattice[pos1], lattice[pos2] = lattice[pos2], lattice[pos1]
 
+#
+# potts model (kawasaki doesn't work)
+#
+
+@njit
+def count_matching_neighbours(lattice: np.ndarray, pos: tuple, state: int, N: int) -> int:
+    """
+    Counts the number of neighbouring cells in the same state as the selected cell.
+    """
+    i, j = pos
+    # boolean sum
+    matching_neighbours = ((lattice[(i - 1) % N,j] == state) + # up
+                            (lattice[(i + 1) % N,j] == state) + # down
+                            (lattice[i,(j - 1) % N] == state) + # left
+                            (lattice[i,(j + 1) % N] == state) # right
+                            )
+    
+    return matching_neighbours
+
+@njit
+def total_energy_potts(lattice: np.ndarray, N: int) -> int:
+    """
+    Finds the total energy of a Potts model lattice.
+    """
+    E = 0.0
+    for i in prange(N):
+        for j in range(N):
+            E += -((lattice[i,(j+1) % N] == lattice[i,j]) + (lattice[(i+1) % N,j] == lattice[i,j])) # right and top neighbour (avoid double counting)
+    return E
+
+@njit
+def glauber_sweep_potts(lattice: np.ndarray, N: int, beta: float, q: int) -> None:
+    """
+    Sweep over the lattice with Glauber dynamics; the tricky part is the acceptance.
+    q = number of states
+    """
+    n_sites = N**2
+
+    for _ in range(n_sites): # do not use prange, monte carlo is sequential
+
+        i = np.random.randint(0, N)
+        j = np.random.randint(0, N)
+        pos = (i, j)
+
+        spin = lattice[i,j]
+        E1 = -count_matching_neighbours(lattice, pos, spin, N) # energy = -J*spin
+        # we must randomly pick a state from one of the available states 0 to q-1
+        proposed_state = np.random.randint(0, q-1) # shift to q-2 (which is q-1 on upper randint bound)
+        if proposed_state >= spin:
+            new_state = proposed_state + 1 # this conditional excludes picking the current state
+        else: 
+            new_state = proposed_state
+        E2 = -count_matching_neighbours(lattice, pos, new_state, N) 
+        delta_E = E2 - E1
+
+        if metropolis_acceptance(delta_E, beta):
+            lattice[i,j] = new_state
+
+@njit
+def order_parameter_potts(lattice: np.ndarray, N: int, q: int) -> float:
+    """
+    Can no longer trivially use magnetisation. Must instead quantify order.
+    """
+    counts = np.bincount(lattice.ravel()) # must flatten for bincount compatibility
+    f_max = np.max(counts) / N**2 # fraction of most common state over lattice
+    m = ((q*f_max - 1) / (q-1)) # order parameter as number of states in most common state (normalised)
+
+    return m
+
+@njit
+def kawasaki_selection_potts(lattice: np.ndarray, N: int) -> tuple:
+    """
+    Selects two random sites on the lattice for Kawasaki dynamics; computes their delta_Es.
+    """
+    # first site
+    i1 = np.random.randint(0, N) # rows
+    j1 = np.random.randint(0, N) # columns
+
+    # second site: ensure they are not the same site
+    i2, j2 = i1, j1 # at first, make the second site equal to the first site
+    while (i2, j2) == (i1, j1): # then use a while loop to change them to a different site
+        i2 = np.random.randint(0, N)
+        j2 = np.random.randint(0, N) # while loop ensures the same site is not randomly picked again
+
+    pos1, pos2 = (i1, j1), (i2, j2)
+
+    spin1 = lattice[pos1]
+    spin2 = lattice[pos2]
+
+    # ignore condition if the spins are identical (no effect)
+    if spin1 == spin2:
+        return 0, pos1, pos2
+    
+    E1_before = -count_matching_neighbours(lattice, pos1, spin1, N)
+    E1_after = -count_matching_neighbours(lattice, pos1, spin2, N)
+    delta_E1 = E1_after - E1_before
+
+    E2_before = -count_matching_neighbours(lattice, pos2, spin2, N)
+    E2_after = -count_matching_neighbours(lattice, pos2, spin1, N)
+    delta_E2 = E2_after - E2_before
+
+    if neighbour_check(pos1, pos2, N): 
+        # if they are nearest neighbours, then the sum after countains an extra spin* (before the flip)
+        delta_E1 += 1 
+        delta_E2 += 1 # add two because E = -J
+
+    return delta_E1 + delta_E2, pos1, pos2
+
+@njit
+def kawasaki_sweep_potts(lattice: np.ndarray, N: int, beta: float) -> None:
+    """
+    Performs one full Kawasaki sweep over a Potts lattice.
+    Not amazing code design because it just changes one argument.
+    """
+    n_sites = N**2
+    
+    for _ in range(n_sites): # do not use prange, monte carlo is sequential
+
+        delta_E, pos1, pos2 = kawasaki_selection_potts(lattice, N)
+        if metropolis_acceptance(delta_E, beta):
+            lattice[pos1], lattice[pos2] = lattice[pos2], lattice[pos1]
+
 class BootstrapErrorAnalysis:
     """
     Implementation of bootstrap resampling error analysis.
@@ -176,9 +298,9 @@ class BootstrapErrorAnalysis:
             values[j] = observable(data[indices], *args)
         return np.std(values, ddof=1)
     
-    def calculate_errors(self, magnetisation, energy, n_sites, beta):
+    def calculate_errors(self, magnetisation: np.ndarray, energy: np.ndarray, n_sites: int, beta: float) -> np.ndarray:
         """
-        Standard Ising Model errors
+        Standard Ising Model errors.
         """
         results = np.empty((self.k, 4)) # kx4 array at once instead of a loop
         for j in range(self.k):
@@ -189,6 +311,108 @@ class BootstrapErrorAnalysis:
         errors = np.std(results, axis=0, ddof=1) # sample of population: lose a degree of freedom (ddof=1)
         return errors
     
+    def calculate_errors_potts(self, order: np.ndarray, energy: np.ndarray, n_sites: int, beta: float) -> np.ndarray:
+        """
+        Basic Potts Model errors; mostly copied from Ising logic.
+        """
+        results = np.empty((self.k, 4)) # kx4 array at once instead of a loop
+        for j in range(self.k):
+            O_sample = self.resample(order)
+            E_sample = self.resample(energy)
+            results[j] = MonteCarloPotts.calculate_observables(O_sample, E_sample, n_sites, beta)
+        
+        errors = np.std(results, axis=0, ddof=1) # sample of population: lose a degree of freedom (ddof=1)
+        return errors
+    
+class MonteCarloPotts:
+    """
+    Potts Model Monte Carlo algorithm.
+    """
+    def __init__(self, N: int, T: float, q: int = 2, lattice_config: str = 'random',
+                 dynamics: str = 'glauber'):
+
+        self.N = N
+        self.beta = 1 / T # easier to input T and work in beta
+        self.q = q # number of parameters
+        self.initialise_grid(lattice_config=lattice_config)
+        self.dynamics = dynamics
+
+    def initialise_grid(self, lattice_config: str = 'random') -> np.ndarray:
+        """
+        Generate a grid according to the user-defined configuration..
+        """
+        if lattice_config == 'random':
+            self.lattice = np.random.randint(0, self.q, size=(self.N, self.N)) # remember dtype=int
+        elif lattice_config == 'ordered':
+            self.lattice = np.ones((self.N, self.N), dtype=int)
+
+    def update_beta(self, T):
+        """
+        Quick helper function to externally update beta.
+        """
+        self.beta = 1 / T
+
+    def sweep(self) -> np.ndarray:
+        """
+        Wraps the chosen dynamics.
+        """
+        if self.dynamics == 'glauber':
+            glauber_sweep_potts(self.lattice, self.N, self.beta, self.q)
+        elif self.dynamics == 'kawasaki':
+            kawasaki_sweep_potts(self.lattice, self.N, self.beta)
+
+    def run(self, n_sweeps: int, measure_interval: int = 10, eq_sweeps: int = 10,
+            animate: bool = False) -> None:
+        """
+        Run the Monte Carlo simulation with optional animation.
+        """
+        self.orders = []
+        self.energies = []
+        self.iters = 0
+
+        if animate:
+            self.fig, self.ax = plt.subplots()
+            self.im = self.ax.imshow(self.lattice, cmap='viridis', vmin=0, vmax=self.q-1, 
+                        interpolation='nearest')
+            self.anim = FuncAnimation(self.fig, self._animate_sweep,
+                                    frames=n_sweeps // 50, interval=50,
+                                    repeat=False)
+            plt.show()
+
+        else:
+            for _ in range(n_sweeps):
+                self.sweep()
+                self.iters += 1
+                if self.iters >= eq_sweeps and self.iters % measure_interval == 0:
+                    self.orders.append(order_parameter_potts(self.lattice, N=self.N, q=self.q))
+                    self.energies.append(total_energy_potts(self.lattice, self.N))                
+
+    def _animate_sweep(self, frames: int) -> list:
+        """
+        Animates one sweep of the lattice.
+        """
+        self.sweep()
+        self.iters += 1
+        self.im.set_data(self.lattice)
+        self.ax.set_title(r"$N_{sweeps} = $" + f"{self.iters}")
+        return [self.im]
+    
+    @staticmethod
+    def calculate_observables(order: np.ndarray, energy: np.ndarray, n_sites: int, beta: float) -> tuple[np.ndarray, ...]:
+        """
+        Computes pertinent observables.
+        """
+        avg_order = np.mean(order) # no longer need the absolute value since we do not fluctuate between 1 and -1
+        order_var = np.var(order) # variance (for susceptibility calculation)
+
+        avg_energy = np.mean(energy)
+        energy_var = np.var(energy)
+
+        susceptibility = (beta * n_sites) * order_var # order is normalised by definition so we multiply by n_sites not divide
+        cv_per_spin = (beta**2 / n_sites) * energy_var # Cv is unchanged as susceptibility definition now matches Ising
+
+        return avg_order, susceptibility, avg_energy, cv_per_spin
+
 class MonteCarloIsing:
     """
     Ising Model Monte Carlo algorithm with engine room., for reference.
@@ -296,8 +520,88 @@ parser.add_argument('--sweep-direction', type=str, choices=['up', 'down'],
                     default='up', help='Decide in which direction the temperature is swept')
 parser.add_argument('--save_data', action='store_true',
                     help='Save plots and datafile')
-parser.add_argument('--lattice_config', type=str, choices=['random', 'all-up'],
+
+subparsers = parser.add_subparsers(dest='Model', required=True)
+
+ising_parser = subparsers.add_parser('Ising')
+ising_parser.add_argument('--lattice_config', type=str, choices=['random', 'all-up'],
                     default='all-up', help='Lattice structure to initialise')
+
+potts_parser = subparsers.add_parser('Potts')
+potts_parser.add_argument('--q', type=int, required=True, help='Number of states')
+potts_parser.add_argument('--lattice_config', type=str, choices=['random', 'ordered'],
+                    default='ordered', help='Lattice structure to initialise')
+
+def potts_main():
+    args = parser.parse_args()
+
+    T0 = args.temp
+    T_min = 0.1
+    T_max = 3.0
+    step = 0.1
+
+    if args.sweep_direction == 'up': # sweep temperature depending on user request
+        temperatures = np.arange(T0, T_max + step, step) # sweep upwards
+    else:
+        temperatures = np.arange(T0, T_min - step, -step) # sweep downwards
+    
+    mc = MonteCarloPotts(args.N, T0, lattice_config=args.lattice_config, dynamics=args.dynamics, q=args.q)
+
+    if args.save_data:
+        
+        bootstrap = BootstrapErrorAnalysis(k=1000)
+        observables = np.empty((len(temperatures), 4))
+        errors = np.empty((len(temperatures), 4))
+
+        for idx, T in enumerate(temperatures):
+            t0 = perf_counter()
+            mc.update_beta(T)
+            if args.lattice_config == 'random':
+                if idx == 0:  # initial temperature
+                    eq_sweeps = args.n_sweeps // 2
+                    print(f"  (Using {eq_sweeps} equilibration sweeps for first temperature)")
+                else:  # normal for ensuing sweeps
+                    eq_sweeps = args.n_sweeps // 100
+            else: # not for case of all-up
+                eq_sweeps = args.n_sweeps // 100
+
+            mc.run(n_sweeps=args.n_sweeps, eq_sweeps=eq_sweeps,
+                measure_interval=10, animate=args.animate)
+
+            O = np.array(mc.orders)
+            E = np.array(mc.energies)
+            n_sites = args.N**2 # this is important, n_sites and N are not the same
+
+            observables[idx] = mc.calculate_observables(O, E, n_sites=n_sites, beta=mc.beta)
+            errors[idx] = bootstrap.calculate_errors_potts(O, E, n_sites=n_sites, beta=mc.beta)
+
+            print(f"\n T = {T:.2f}, ⟨O⟩ = {observables[idx,0]:.4f}, "
+                f"χ = {observables[idx,1]:.4f}, Cv = {observables[idx,3]:.4f} \n"
+                f"Took {(perf_counter() - t0):.3f} seconds.")
+            
+        labels = [("⟨O⟩", "Order Parameter"), ("χ", "Susceptibility"),
+            ("⟨E⟩", "Energy"), ("Cv", "Heat Capacity")]
+
+        for col, (ylabel, title) in enumerate(labels):
+            plt.figure()
+            plt.errorbar(temperatures, observables[:, col], yerr=errors[:, col], marker='o')
+            plt.xlabel(r"$\text{Temperature} T$")
+            plt.ylabel(ylabel)
+            plt.title(f"{args.dynamics.capitalize()} {title}")
+            plt.grid()
+            if args.save_data:
+                plt.savefig(f"{args.dynamics}_{title.lower().replace(' ','_')}.png", dpi=300)
+            plt.show()
+
+        df = pandas.DataFrame(
+        np.column_stack([temperatures, observables, errors]),
+        columns=['T', 'O', 'chi', 'E', 'cv', 'O_err', 'chi_err', 'E_err', 'cv_err']
+        )
+        df.to_csv(f"{args.dynamics}_results_N{args.N}.csv", index=False)
+
+    else:
+        mc.run(n_sweeps=args.n_sweeps, measure_interval=10, eq_sweeps=100,
+               animate=args.animate)
 
 def main():
     args = parser.parse_args()
