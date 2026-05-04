@@ -32,7 +32,7 @@ def total_energy_ising(lattice: np.ndarray, N: int, h: np.ndarray) -> int:
     E = 0.0
     for i in prange(N):
         for j in range(N):
-            E += -((lattice[i,j] * (lattice[i,(j+1) % N] + lattice[(i+1) % N,j])) + (h[i,j] * lattice[i,j])) # right and top neighbour (avoid double counting)
+            E += (lattice[i,j] * (lattice[i,(j+1) % N] + lattice[(i+1) % N,j])) - (h[i,j] * lattice[i,j]) # right and top neighbour (avoid double counting)
     return E
 
 @njit
@@ -350,8 +350,8 @@ def main():
             ax.set_xlabel("Iterations")
             ax.set_ylabel("Ms")
             ax.grid()
-            fig.savefig(f"p{p}_ms_time.png", dpi=300)
             ax.set_title("Staggered Magnetisation against Time")
+            fig.savefig(f"p{p}_ms_time.png", dpi=300)
             plt.show()
 
             fig, ax = plt.subplots(figsize=(8, 6))
