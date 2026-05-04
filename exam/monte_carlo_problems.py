@@ -675,4 +675,4 @@ def main():
                animate=args.animate)
 
 if __name__ == "__main__":
-    main()
+    potts_main()
