@@ -123,6 +123,8 @@ class GameOfLife:
         self.equilibrated = False
         self.eq_time = None
 
+        self.initialise_grid()
+
     def initialise_grid(self) -> np.ndarray:
         """
         Initialises the game of life grid.
@@ -312,7 +314,8 @@ class GameOfLife:
 
 class SIRS:
 
-    def __init__(self, N: int, p1: float, p2: float, p3: float):
+    def __init__(self, N: int, p1: float, p2: float, p3: float, 
+                 frac_immune: float = 0.0):
 
         # infection probabilities
         self.p1 = p1 # p(S -> I), suscpetible == 0
@@ -322,6 +325,9 @@ class SIRS:
         self.N = N
         self.grid = np.random.choice([0, 1, 2], size=(N, N)).astype(int)
         self.cmap = ListedColormap(['blue', 'red', 'green', 'white']) # white: immune
+
+        if frac_immune > 0:
+            self.apply_immunity(frac_immune=frac_immune)
 
     def apply_immunity(self, frac_immune: float) -> np.ndarray:
         """
@@ -410,14 +416,35 @@ parser = argparse.ArgumentParser(description='Cellular Automata: GoL and SIRS')
 
 # shared arguments
 parser.add_argument('--N', type=int, default=50)
-parser.add_argument('--max_steps', type=int, default=1000)
+parser.add_argument('--max_steps', type=int, default=10000)
 parser.add_argument('--animate', action='store_true')
-parser.add_argument('--eq-steps', type=int, default=10)
+parser.add_argument('--eq_steps', type=int, default=10)
+
+subparsers = parser.add_subparsers(dest='game', required=True)
+
+# game of life arguments
+gol_parser = subparsers.add_parser('GoL')
+gol_parser.add_argument('--config', type=str, choices=['random', 'travelling', 'oscillating'])
+gol_parser.add_argument('--density', type=float, default=0.5)
+
+# SIRS arguments
+sirs_parser = subparsers.add_parser('SIRS')
+sirs_parser.add_argument('--p1', type=float, required=True, help='p(S->I)')
+sirs_parser.add_argument('--p2', type=float, required=True, help='p(I->R)')
+sirs_parser.add_argument('--p3', type=float, required=True, help='p(R->S)')
+sirs_parser.add_argument('--immunity_frac', type=float, default=0.0)
+sirs_parser.add_argument('--measure_interval', type=int, default=100)
 
 def main():
-    """
-    Work in progress.
-    """
+    args = parser.parse_args()
+
+    if args.game == 'SIRS':
+        sirs = SIRS(N=args.N, p1=args.p1, p2=args.p2, p3=args.p3, frac_immune=args.immunity_frac)
+        sirs.run(animate=args.animate, max_steps=args.max_steps, measure_interval=args.measure_interval, eq_steps=args.eq_steps)
+
+    elif args.game == 'GoL':
+        gol = GameOfLife(N=args.N, density=args.density, config=args.config, eq_steps=args.eq_steps)
+        gol.run(animate=args.animate, max_steps=args.max_steps)
 
 if __name__ == '__main__':
     main()
