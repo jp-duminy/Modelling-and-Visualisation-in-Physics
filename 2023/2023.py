@@ -266,7 +266,7 @@ class SequentialRPS:
     
     @staticmethod
     def minority_phase_run_e(p2: float, p3: float, N: int = 50, p1: float = 0.5, 
-                           eq_steps: int = 1500, measure_interval: int = 100, measure_steps: int = 5000) -> tuple[np.ndarray, ...]:
+                           eq_steps: int = 1500, measure_steps: int = 5000) -> tuple[np.ndarray, ...]:
         """
         Question d) data collection (joblib friendly)
         """
@@ -276,8 +276,7 @@ class SequentialRPS:
         fractions = np.zeros(measure_steps)
         for i in range(measure_steps):
             rps.sweep()
-            if i % measure_interval == 0:
-                fractions[i] = rps.find_minority_fraction()
+            fractions[i] = rps.find_minority_fraction()
         return np.mean(fractions)
 
 parser = argparse.ArgumentParser(description='Cellular Automata: RPS Models')
