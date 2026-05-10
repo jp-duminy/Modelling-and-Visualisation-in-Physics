@@ -19,6 +19,7 @@ from time import perf_counter
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.colors import ListedColormap
+from matplotlib.colors import BoundaryNorm
 from tqdm import tqdm
 import scienceplots
 plt.style.use('science') # more scientific style for matplotlib
@@ -65,7 +66,7 @@ def eight_neighbours(grid: np.ndarray, state: int) -> np.ndarray:
 
 @njit
 def sequential_sweep(grid: np.ndarray, N: int, p1: float, p2: float, 
-               p3: float) -> None:
+               p3: float) -> np.ndarray:
     """
     Sequential, stochastic sweep over grid.
     """
@@ -109,51 +110,7 @@ def sequential_sweep(grid: np.ndarray, N: int, p1: float, p2: float,
                         grid[i,j] = 0
                     break 
 
-class BootstrapErrorAnalysis:
-    """
-    Implementation of bootstrap resampling error analysis.
-    Reused some methods from CP1.
-    """
-    def __init__(self, k=1000, seed=2317434):
-        self.k = k # number of times we resample
-        self.generator = np.random.default_rng(seed) # my student ID
-
-    def resample_blocks(self, data, block_size=50):
-        """
-        Instead of resampling from the full dataset, we resample from blocks.
-        
-        Our data is correlated over time since SIRS is time-dependent. For this reason it is better
-        to use block bootstrap to replicate the correlation and account for this in our error bars,
-        avoiding underestimation of our errors. https://en.wikipedia.org/wiki/Bootstrapping_(statistics)
-        """
-        n_blocks = len(data) // block_size
-        blocks = data[:n_blocks * block_size].reshape(n_blocks, block_size)
-        chosen = self.generator.integers(0, n_blocks, size=n_blocks)
-        return blocks[chosen].flatten()
-
-    def calculate_errors(self, infected_timeseries, block_size=50):
-        """
-        Compute the errors from the resampled data using block bootstrap.
-        """
-        data = np.array(infected_timeseries)
-        bootstrap_variances = np.zeros(self.k)
-        for i in range(self.k):
-            resampled = self.resample_blocks(data, block_size) 
-            bootstrap_variances[i] = np.var(resampled)
-        return np.std(bootstrap_variances)
-
-class SequentialRPS:
-
-    def __init__(self, N: int, p1: float, p2: float, p3: float):
-
-        # infection probabilities
-        self.p1 = p1 # p(R -> P), rock == 0
-        self.p2 = p2 # p(P -> S), paper == 1
-        self.p3 = p3 # p(S -> R), scissors == 2
-        
-        self.N = N
-        self.initialise_grid(N=N)
-        self.cmap = ListedColormap(['blue', 'red', 'green', 'white']) # white: immune
+    return grid
 
 class ParallelRPS:
 
@@ -161,7 +118,8 @@ class ParallelRPS:
 
         self.N = N
         self.initialise_grid(N=N)
-        self.cmap = ListedColormap(['blue', 'red', 'green', 'white']) # white: immune
+        self.cmap = ListedColormap(['salmon', 'steelblue', 'purple']) 
+        self.norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], ncolors=3)
 
     def initialise_grid(self, N):
         """
@@ -214,7 +172,7 @@ class ParallelRPS:
         """
         return int((self.grid[self.N//2, self.N//2] == 0))
     
-    def run(self, animate: bool = False, max_steps: int = 10000, measure_interval: int = 1000, eq_steps: int = 100):
+    def run(self, animate: bool = False, max_steps: int = 10000, measure_interval: int = 100, eq_steps: int = 100):
         """
         Runs the parallel RPS model till the max number of steps is reached.
         """
@@ -222,8 +180,9 @@ class ParallelRPS:
         self.t_vals = []
         if animate:
             self.fig, self.ax = plt.subplots()
-            self.im = self.ax.imshow(self.grid, cmap=self.cmap, 
-                          vmin=0, vmax=3, interpolation='nearest') # remember to increase vmax for new sites
+            self.im = self.ax.imshow(self.grid, cmap=self.cmap, norm=self.norm, interpolation='nearest')
+            cbar = self.fig.colorbar(self.im, ax=self.ax, ticks=[0, 1, 2])
+            cbar.ax.set_yticklabels(['Rock', 'Paper', 'Scissors'])
             self.anim = FuncAnimation(self.fig, self._animate_step,
                                     frames=max_steps, interval=50,
                                     repeat=False)
@@ -231,9 +190,95 @@ class ParallelRPS:
         else:
             for i in range(max_steps):
                 self.step()
-                if i > eq_steps:
+                if i > eq_steps and i % measure_interval == 0:
                     self.rock_vals.append(self.measure_rock_evolution())
                     self.t_vals.append(i)
+
+class SequentialRPS:
+
+    def __init__(self, N: int, p1: float, p2: float, p3: float):
+
+        # infection probabilities
+        self.p1 = p1 # p(R -> P), rock == 0
+        self.p2 = p2 # p(P -> S), paper == 1
+        self.p3 = p3 # p(S -> R), scissors == 2
+        
+        self.N = N
+        self.grid = np.random.choice([0, 1, 2], size=(N, N)).astype(int)
+        self.cmap = ListedColormap(['salmon', 'steelblue', 'purple']) 
+        self.norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], ncolors=3)
+
+    def sweep(self) -> np.ndarray:
+        """
+        Wrapper of numba sequential sweep.
+        """
+        self.grid = sequential_sweep(grid=self.grid, N=self.N, p1=self.p1, p2=self.p2, p3=self.p3)
+
+    def _animate_sweep(self, frame):
+        """
+        Animates a sweep of the lattice.
+        """
+        self.sweep()
+
+        self.im.set_data(self.grid)
+        self.ax.set_title(f'Sweep: {frame}')
+
+        return [self.im]
+    
+    def run(self, animate: bool = False, max_steps: int = 10000, measure_interval: int = 1000, eq_steps: int = 100):
+        """
+        Runs the parallel RPS model till the max number of steps is reached.
+        """
+        if animate:
+            self.fig, self.ax = plt.subplots()
+            self.im = self.ax.imshow(self.grid, cmap=self.cmap, norm=self.norm, interpolation='nearest') 
+            cbar = self.fig.colorbar(self.im, ax=self.ax, ticks=[0, 1, 2])
+            cbar.ax.set_yticklabels(['Rock', 'Paper', 'Scissors'])
+            self.anim = FuncAnimation(self.fig, self._animate_sweep,
+                                    frames=max_steps, interval=50,
+                                    repeat=False)
+            plt.show()  
+        else:
+            for _ in range(max_steps):
+                self.sweep()
+
+    def find_minority_fraction(self) -> float:
+        """
+        Finds which state is the minority.
+        """
+        least_frequent_state = np.argmin(np.bincount(self.grid.flatten(), minlength=3)) # minlength 3 accounts for an absent state!
+        return np.sum((self.grid == least_frequent_state)) / self.N**2
+
+    @staticmethod
+    def minority_phase_run_d(p3: float, N: int = 50, p1: float = 0.5, p2: float = 0.5, 
+                           eq_steps: int = 1500, measure_steps: int = 5000) -> tuple[np.ndarray, ...]:
+        """
+        Question d) data collection (joblib friendly)
+        """
+        rps = SequentialRPS(N=N, p1=p1, p2=p2, p3=p3)
+        for _ in range(eq_steps):
+            rps.sweep()
+        fractions = np.zeros(measure_steps)
+        for i in range(measure_steps):
+            rps.sweep()
+            fractions[i] = rps.find_minority_fraction()
+        return np.mean(fractions), np.var(fractions)
+    
+    @staticmethod
+    def minority_phase_run_e(p2: float, p3: float, N: int = 50, p1: float = 0.5, 
+                           eq_steps: int = 1500, measure_interval: int = 100, measure_steps: int = 5000) -> tuple[np.ndarray, ...]:
+        """
+        Question d) data collection (joblib friendly)
+        """
+        rps = SequentialRPS(N=N, p1=p1, p2=p2, p3=p3)
+        for _ in range(eq_steps):
+            rps.sweep()
+        fractions = np.zeros(measure_steps)
+        for i in range(measure_steps):
+            rps.sweep()
+            if i % measure_interval == 0:
+                fractions[i] = rps.find_minority_fraction()
+        return np.mean(fractions)
 
 parser = argparse.ArgumentParser(description='Cellular Automata: RPS Models')
 
@@ -255,8 +300,8 @@ sequential_parser = subparsers.add_parser('Sequential')
 sequential_parser.add_argument('--p1', type=float, required=True, help='p(S->I)')
 sequential_parser.add_argument('--p2', type=float, required=True, help='p(I->R)')
 sequential_parser.add_argument('--p3', type=float, required=True, help='p(R->S)')
-sequential_parser.add_argument('--immunity_frac', type=float, default=0.0)
 sequential_parser.add_argument('--measure_interval', type=int, default=100)
+sequential_parser.add_argument('--measure', action='store_true')
 
 def main():
     args = parser.parse_args()
@@ -274,10 +319,60 @@ def main():
             ax.set_ylabel(r"$R$")
             ax.grid()
             ax.set_title(f"Evolution of Central Point over Time (Parallel)")
-            fig.savefig(f"cell_rock_evolution.png", dpi=300)
+            fig.savefig(f"task_b_graph.png", dpi=300)
             plt.show()
-            pd.DataFrame({'rock_vals': rock_vals, 't_vals': t_vals}).to_csv('cell_rock_evolution_data.csv')
+            pd.DataFrame({'rock_vals': rock_vals, 't_vals': t_vals}).to_csv('task_b_data.csv')
         else:
+            rps.run(animate=args.animate, max_steps=args.max_steps)
+
+    elif args.type == 'Sequential':
+
+        if args.measure:
+
+            # task d data collection
+            p3_vals_d = np.arange(0, 0.1, 0.005) # 20 steps between 0 and 0.1
+            d_results = np.array(Parallel(n_jobs=-1, return_as='list')(
+                delayed(SequentialRPS.minority_phase_run_d)(p3) for p3 in p3_vals_d))
+            means_d = d_results[:,0]
+            vars_d = d_results[:,1]
+            fig1, ax1 = plt.subplots(figsize=(8,6))
+            ax1.plot(p3_vals_d, means_d)
+            ax1.set_xlabel(r"$p_3$")
+            ax1.set_ylabel(f"Mean Minority Fraction")
+            ax1.grid()
+            ax1.set_title(f"Mean Minority Fraction as a Function of p3 (Part d)")
+            fig1.savefig(f"task_d_mean_graph.png", dpi=300)
+            plt.show()
+            pd.DataFrame({'minority_fracs': means_d, 'p3_vals': p3_vals_d}).to_csv('task_d_mean_data.csv')
+
+            fig2, ax2 = plt.subplots(figsize=(8,6))
+            ax2.plot(p3_vals_d, vars_d)
+            ax2.set_xlabel(r"$p_3$")
+            ax2.set_ylabel(f"Variance of Minority Fraction")
+            ax2.grid()
+            ax2.set_title(f"Variance of Minority Fraction as a Function of p3 (Part d)")
+            fig2.savefig(f"task_d_var_graph.png", dpi=300)
+            plt.show()
+            pd.DataFrame({'minority_fracs': means_d, 'p3_vals': p3_vals_d}).to_csv('task_d_var_data.csv')
+
+            # task e) data collections
+            p_vals_e = np.arange(0, 0.3, 0.02) # 15 steps between 0 and 0.3
+            e_results = np.array(Parallel(n_jobs=-1, return_as='list')(
+                delayed(SequentialRPS.minority_phase_run_e)(p2, p3) for p2 in p_vals_e for p3 in p_vals_e))
+            phase_diagram = e_results.reshape(len(p_vals_e), len(p_vals_e))
+            fig3, ax3 = plt.subplots(figsize=(8,6))
+            im = ax3.imshow(phase_diagram, origin='lower', extent=[0, 0.3, 0, 0.3],
+                    aspect='equal', cmap='inferno')
+            fig3.colorbar(im, label=f"Minority Fraction")
+            ax3.set_xlabel(r'$p_3$ (P $\to$ S)')
+            ax3.set_ylabel(r'$p_2$ (S $\to$ R)')
+            ax3.set_title(f"RPS Phase Diagram (p(R -> P) = 0.5)")
+            fig3.savefig(f"task_e_heatmap.png", dpi=300)
+            plt.show()
+            pd.DataFrame(phase_diagram, index=p_vals_e, columns=p_vals_e).to_csv('task_e_data.csv')
+
+        else:
+            rps = SequentialRPS(N=args.N, p1=args.p1, p2=args.p2, p3=args.p3)
             rps.run(animate=args.animate, max_steps=args.max_steps)
 
 if __name__ == "__main__":
