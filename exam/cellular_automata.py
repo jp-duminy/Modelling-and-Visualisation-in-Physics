@@ -75,6 +75,17 @@ def eight_neighbours(grid: np.ndarray) -> np.ndarray:
 
     return neighbour_sum
 
+def eight_state_neighbours(grid: np.ndarray, state: int) -> np.ndarray:
+    """
+    Parallel contribution sum from nearest eight neighbours in same state (includes diagonals).
+    """
+    neighbour_sum = np.zeros_like(grid)
+    
+    for dx, dy in eight_shifts:
+        neighbour_sum += np.roll(np.roll((grid==state), dx, axis=0), dy, axis=1)
+
+    return neighbour_sum
+
 @njit
 def sirs_sweep(grid: np.ndarray, N: int, p1: float, p2: float, 
                p3: float) -> None:
