@@ -234,8 +234,7 @@ class ThreeChemicalSpecies:
             a_frac, b_frac, c_frac = tcs.compute_concentration_fractions()
             if (a_frac == 1.0) or (b_frac == 1.0) or (c_frac == 1.0):
                 return tcs.time
-            elif tcs.time > 1000:
-                return 1001
+        return 1001
 
     @staticmethod
     def absorption_time_trials() -> None:
@@ -244,7 +243,7 @@ class ThreeChemicalSpecies:
         """
         n_sims = range(10)
         results = np.array(Parallel(n_jobs=-1, return_as='list')(
-            delayed(ThreeChemicalSpecies.absorption_time)(dt=0.01, max_steps=1005) for n in n_sims))
+            delayed(ThreeChemicalSpecies.absorption_time)(dt=0.01, max_steps=100005) for n in n_sims))
         trimmed_results = results[results < 1000]
 
         avg_time = np.mean(trimmed_results)
