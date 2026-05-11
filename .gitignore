@@ -15,6 +15,8 @@ env/
 *.log
 *.csv 
 *.png
+*.gif
+*.mp4
 
 # OS / temp files
 .DS_Store
