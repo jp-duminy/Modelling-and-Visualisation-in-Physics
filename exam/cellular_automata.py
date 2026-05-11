@@ -19,7 +19,7 @@ from time import perf_counter
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.colors import ListedColormap
-from tqdm import tqdm
+from matplotlib.colors import BoundaryNorm
 import scienceplots
 plt.style.use('science') # more scientific style for matplotlib
 plt.rcParams['text.usetex'] = False # this avoids an annoying latex installation
@@ -31,7 +31,6 @@ from joblib import Parallel, delayed
 #
 # lattice shifts
 #
-
 
 four_shifts = np.array([(-1, 0), # top
                         (0, -1), # left
@@ -336,6 +335,7 @@ class SIRS:
         self.N = N
         self.grid = np.random.choice([0, 1, 2], size=(N, N)).astype(int)
         self.cmap = ListedColormap(['blue', 'red', 'green', 'white']) # white: immune
+        self.norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], ncolors=4)
 
         if frac_immune > 0:
             self.apply_immunity(frac_immune=frac_immune)
@@ -378,8 +378,9 @@ class SIRS:
         self.infected_fraction = []
         if animate:
             self.fig, self.ax = plt.subplots()
-            self.im = self.ax.imshow(self.grid, cmap=self.cmap, 
-                          vmin=0, vmax=3, interpolation='nearest') # remember to increase vmax for new sites
+            self.im = self.ax.imshow(self.grid, cmap=self.cmap, norm=self.norm, interpolation='nearest')
+            cbar = self.fig.colorbar(self.im, ax=self.ax, ticks=[0, 1, 2])
+            cbar.ax.set_yticklabels(['Susceptible', 'Infected', 'Recovered'])
             self.anim = FuncAnimation(self.fig, self._animate_sweep,
                                     frames=max_steps, interval=50,
                                     repeat=False)

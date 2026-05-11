@@ -128,7 +128,7 @@ def compute_div_3D(fx: np.ndarray, fy: np.ndarray, fz: np.ndarray, N: int, dx: f
 
                 div[i,j,k] = (((fx[(i+1)%N,j,k] - fx[(i-1)%N,j,k]) / (2*dx)) + 
                               ((fy[i,(j+1)%N,k] - fy[i,(j-1)%N,k]) / (2*dx)) +
-                              ((fz[i,j,(k+1)%N] - fz[i,j,(k-1)%N] / (2*dx))))
+                              ((fz[i,j,(k+1)%N] - fz[i,j,(k-1)%N]) / (2*dx)))
                 
     return div
 
@@ -291,3 +291,352 @@ def find_stable_timestep(D: float, dx: float, ndim: int = 2, safety_threshold: f
     Uses the Von Neumann analysis to find a (somewhat conservative) stable timestep for desired parameters.
     """
     return safety_threshold * dx**2 / (2 * ndim * D)
+
+#
+# C-H specific.
+#
+
+@njit
+def compute_mu(phi: np.ndarray, N: int, dx: float) -> np.ndarray:
+    """
+    Computes the discretised chemical potential.
+    """
+    return -phi + phi**3 - compute_laplacian_2D(f=phi, N=N, dx=dx)
+
+@njit
+def cahn_step(phi: np.ndarray, N: int, dt: float, dx: float) -> np.ndarray:
+    """
+    Performs one forward Euler for C-H.
+    """
+    mu = compute_mu(phi=phi, N=N, dx=dx)
+    return phi + dt * compute_laplacian_2D(f=mu, N=N, dx=dx)
+    
+@njit
+def total_free_energy(phi: np.ndarray, N: int, dx: float) -> float:
+    """
+    Computes the discretised free energy.
+    """
+    grad_x, grad_y = compute_grad_2D(f=phi, N=N, dx=dx)
+    f = (-1/2 * phi**2) + (1/4 * phi**4) + (1/2 * (grad_x**2 + grad_y**2))
+    return np.sum(f) * dx**2
+
+class InitialValueProblem:
+    """
+    Demonstrated via the Cahn-Hilliard equation.
+    """
+    def __init__(self, phi0: float, N: int = 100, dx: float = 1.0, dt: float = 0.01):
+
+        self.N = N
+        self.dx = dx
+        self.dt = dt
+        self.time = 0.0
+        self.initialise_grid(phi0=phi0)
+
+    def initialise_grid(self, phi0: float) -> np.ndarray:
+        """
+        Initialises the grid according to specified format.
+        """
+        self.phi = np.random.uniform(phi0 - 0.1, phi0 + 0.1, (self.N, self.N))
+    
+    def step(self) -> None:
+        """
+        Advance one step on the lattice.
+        """
+        self.phi = cahn_step(self.phi, self.N, self.dt, self.dx)
+        self.time += self.dt
+
+    def _animate_sweep(self, frames: int) -> list:
+        """
+        Animates a sweep (defined as the number of steps in range()).
+        'frames' argument is necessary for FuncAnimation call.
+        """
+        for _ in range(50):
+            self.step()
+        self.im.set_data(self.phi)
+        self.ax.set_title(f't = {self.time:.2f}')
+        return [self.im]
+
+    def run(self, animate: bool, max_steps: int):
+        """
+        Run the Cahn-Hilliard equation.
+        """
+        if animate:
+            self.fig, self.ax = plt.subplots()
+            self.im = self.ax.imshow(self.phi, cmap='coolwarm', vmin=-1, vmax=1)
+            cbar = self.fig.colorbar(self.im)
+            cbar.ax.set_title(r"$\phi$")
+            self.anim = FuncAnimation(self.fig, self._animate_sweep,
+                                    frames=max_steps // 50, interval=50,
+                                    repeat=False)
+            plt.show()
+
+        else:
+            for _ in range(max_steps):
+                self.step()
+
+    @staticmethod
+    def data_collection(phi0: float, N: int, dx: float, dt: float, 
+                        n_steps: int, measure_interval: int) -> tuple[np.ndarray, ...]:
+        """
+        Wrapper run (for parallelised data collection).
+        """
+        free_energy_vals = []
+        time_vals = []
+        ch = InitialValueProblem(phi0=phi0, N=N, dx=dx, dt=dt) # this is c-h specific
+        for i in range(n_steps):
+            ch.step()
+            if i % measure_interval == 0:
+                free_energy_vals.append(total_free_energy(ch.phi, N, dx))
+                time_vals.append(ch.time)
+
+        return np.array(time_vals), np.array(free_energy_vals)
+    
+class BoundaryValueProblem:
+    """
+    Demonstrated via the Poisson solver.
+    """
+
+    def __init__(self, method: str, tolerance: float, omega: float = 1.0, 
+                 ndim: int = 2, N: int = 100, dx: float = 1.0):
+
+        self.N = N 
+        self.dx = dx
+        self.ndim = ndim
+
+        self.phi = self.initialise_grid(N=N, val=0.0, ndim=ndim)
+        self.rho = self.initialise_grid(N=N, val=0.0, ndim=ndim)
+
+        self.method = method
+        self.omega = omega
+        self.tolerance = tolerance
+
+        self.converged = False
+        self.iters = 0
+
+    def initialise_grid(self, N: int, val: float, ndim: int) -> np.ndarray:
+        """
+        Creates grid ndarray.
+        """
+        shape = tuple([N] * ndim)
+        return np.full(shape=shape, fill_value=val)
+    
+    def initialise_rho(self, initial_state: str = 'monopole') -> None:
+        """
+        Initialise with monopole/wire/gaussian.
+        """
+        if initial_state == 'monopole':
+            self.rho[self.N//2, self.N//2, self.N//2] = 1.0
+        elif initial_state == 'wire':
+            self.rho[self.N//2, self.N//2] = 1.0
+        elif initial_state == 'gaussian':
+            x = np.arange(self.N) - self.N//2 # from -25 -> 25
+            X, Y, Z = np.meshgrid(x, x, x, indexing='ij') # indexing ij adheres to array indices rather than matrix indices
+            sigma = 2.0  
+            self.rho = np.exp(-(X**2 + Y**2 + Z**2) / (2*sigma**2))
+            self.rho = self.rho / (np.sum(self.rho) * self.dx**3) # normalise
+    
+    def get_midplane(self) -> np.ndarray:
+        """
+        Helper function to return midplane of 3D array.
+        """
+        return self.phi[self.N//2, :, :]
+    
+    def compute_electric_field(self) -> tuple[np.ndarray, ...]:
+        """
+        Computes the electric field (3D).
+        """
+        grad_x, grad_y, grad_z = compute_grad_3D(f=self.phi, N=self.N, dx=self.dx)
+        return -grad_x, -grad_y, -grad_z
+    
+    def compute_magnetic_field(self) -> tuple[np.ndarray, ...]:
+        """
+        Computes the magnetic field, which is the curl (2D).
+        """
+        grad_x, grad_y = compute_grad_2D(f=self.phi, N=self.N, dx=self.dx)
+        return grad_y, -grad_x
+    
+    def plot_potential_contour(self) -> None:
+        """
+        Potential contour plot.
+        """
+        fig, ax = plt.subplots(figsize=(8,6))
+
+        cf = ax.contourf(self.get_midplane(), levels=50, cmap='viridis') # contourf handles filled contours
+        cbar = fig.colorbar(cf, ax=ax, fraction=0.046, pad=0.04)
+        label = r"$\phi$" # change label as needed
+        cbar.set_label(label)
+
+        ax.set_title(r"Arbitrary Potential $\phi$ (Midplane)")
+        fig.savefig(f"potential_contour.png", dpi=300, bbox_inches='tight')
+        plt.show()
+    
+    def step(self) -> None:
+        """
+        One step of the solver.
+        """
+        phi0 = self.phi.copy()
+        if self.method == 'gs':
+            if self.ndim == 2:
+                gauss_seidel_2D_dirichlet(f=self.phi, rho=self.rho, dx=self.dx, N=self.N,
+                                          omega=self.omega)
+            elif self.ndim == 3:
+                gauss_seidel_3D_dirichlet(f=self.phi, rho=self.rho, dx=self.dx, N=self.N,
+                            omega=self.omega)
+        elif self.method == 'jacobi':
+            if self.ndim == 2:
+                self.phi = jacobi_2D_dirichlet(f0=phi0, rho=self.rho, dx=self.dx, N=self.N)
+            elif self.ndim == 3:
+                self.phi = jacobi_3D_dirichlet(f0=phi0, rho=self.rho, dx=self.dx, N=self.N)
+
+        self.iters += 1
+
+        if not self.converged and np.max(np.abs(self.phi - phi0)) < self.tolerance:
+            self.converged=True
+            print(f"Converged in {self.iters} iterations.")
+
+    def _animate_step(self, frames: int) -> list:
+        """
+        Animates a step.
+        'frames' argument is necessary for FuncAnimation call.
+        """
+        for _ in range(20):
+            self.step()
+        if self.ndim == 2:
+            midplane = self.phi
+        elif self.ndim == 3:
+            midplane = self.get_midplane()
+
+        self.im.set_data(midplane)
+        self.im.set_clim(vmin=midplane.min(), vmax=midplane.max())
+        self.ax.set_title(r"$N_{\mathrm{iters}}$ = " + f"{self.iters}")
+
+        return [self.im]
+
+    def run(self, animate: bool, max_steps: int):
+        """
+        Run the Poisson solver.
+        """
+        if animate:
+            self.fig, self.ax = plt.subplots()
+            if self.ndim == 2:
+                midplane = self.phi
+            elif self.ndim == 3:
+                midplane = self.get_midplane()
+            self.im = self.ax.imshow(midplane, cmap='viridis')
+            cbar = self.fig.colorbar(self.im)
+            cbar.ax.set_title(r"$\phi$")
+            self.anim = FuncAnimation(self.fig, self._animate_step,
+                                    frames=max_steps // 50, interval=50,
+                                    repeat=False)
+            plt.show()
+
+        else:
+            for _ in range(max_steps):
+                self.step()
+                if self.converged:
+                    break
+
+    @staticmethod
+    def _sor_single_run(tolerance: float, omega: float, N: int, dx: float, rho: np.ndarray):
+        """
+        Performs a single run of the SOR GS.
+        Standalone function for parallelised data collection.
+        """
+        po = BoundaryValueProblem(method='gs', tolerance=tolerance, omega=omega, N=N, 
+                                  dx=dx, ndim=rho.ndim)
+        po.rho = rho.copy() # protects against parallel instances overwriting rho
+        for _ in range(100000):
+            po.step()
+            if po.converged:
+                break
+        return omega, po.iters
+
+    def measure_sor(self) -> None:
+        """
+        Sweep over omega values and record iterations to convergence.
+        """
+        omega_range = np.linspace(1.75, 1.95, 40) # generous omega range, can drop if performance requires
+        results = Parallel(n_jobs=-1, return_as='list')(
+            delayed(self._sor_single_run)(self.tolerance, omega, self.N, self.dx, self.rho)
+            for omega in omega_range
+            )
+        omegas, iters = zip(*results)
+        
+        fig, ax = plt.subplots(figsize=(8,6))
+        min_idx = np.argmin(iters)
+        ax.plot(omegas, iters, marker='o', color='r', label=f"ω={omegas[min_idx]:.2f}, n={iters[min_idx]}")
+        ax.legend()
+        ax.grid()
+        ax.set_xlabel(r'$\omega$')
+        ax.set_ylabel('Iterations to Convergence')
+        ax.set_title('SOR Convergence')
+        fig.savefig("sor_convergence_plot.png", dpi=300)
+        
+        pd.DataFrame({'omega': omegas, 'iterations': iters}).to_csv('sor_convergence_data.csv', index=False)
+    
+        plt.show()        
+
+parser = argparse.ArgumentParser(description='Partial Differential Equations')
+
+parser.add_argument('--N', type=int, default=50)
+parser.add_argument('--animate', action='store_true')
+parser.add_argument('--dx', type=float, required=True)
+parser.add_argument('--max_steps', type=int, default=10000, required=True)
+parser.add_argument('--measure', action='store_true')
+
+subparsers = parser.add_subparsers(dest='type', required=True)
+
+initial_parser = subparsers.add_parser('Initial')
+initial_parser.add_argument('--phi0', type=float, required=True)
+initial_parser.add_argument('--dt', type=float, required=True)
+initial_parser.add_argument('--measure_interval', type=int, default=10)
+
+boundary_parser = subparsers.add_parser('Boundary')
+boundary_parser.add_argument('--method', type=str, choices=['gs', 'jacobi'])
+boundary_parser.add_argument('--tol', type=float, default=1e-3)
+boundary_parser.add_argument('--omega', type=float, default=1.0)
+boundary_parser.add_argument('--initial_state', type=str, choices=['monopole', 'wire', 'gaussian'])
+boundary_parser.add_argument('--ndim', type=int, default=2)
+
+def main():
+
+    args = parser.parse_args()
+
+    if args.type == 'Initial':
+        if args.measure:
+
+            results = Parallel(n_jobs=2)(
+                    delayed(InitialValueProblem.data_collection)(
+                        p, args.N, args.dx, args.dt,
+                        args.max_steps, args.measure_interval
+                    ) for p in [0.0, 0.5]
+                    )
+            
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+            for ax, (time_vals, fe_vals), phi0 in zip([ax1, ax2], results, [0.0, 0.5]):
+                ax.plot(time_vals, fe_vals)
+                ax.set_title(r"Cahn-Hilliard Free Energy against Time for $\phi_0 = $" + f"{phi0}")
+                ax.set_xlabel(f"Dimensionless Time")
+                ax.set_ylabel("Dimensionless Free Energy")
+                pd.DataFrame({'t_vals': time_vals, 'fe_vals': fe_vals}).to_csv(f'{phi0}_free_energy_data.csv', index=False)
+
+            fig.tight_layout()
+            plt.savefig("free_energy_plot.png", dpi=300, bbox_inches='tight')
+            plt.show()
+        else:
+            ivp = InitialValueProblem(phi0=args.phi0, N=args.N, dx=args.dx, dt=args.dt)
+            ivp.run(animate=args.animate, max_steps=args.max_steps)
+    elif args.type == 'Boundary':
+        if args.measure:
+            po = BoundaryValueProblem(method='gs', tolerance=1e-6, ndim=args.ndim)
+            po.initialise_rho(initial_state='monopole')
+            po.measure_sor()
+        else:
+            po = BoundaryValueProblem(method=args.method, tolerance=args.tol, omega=args.omega, N=args.N, 
+                                      dx=args.dx, ndim=args.ndim)
+            po.initialise_rho(initial_state=args.initial_state)
+            po.run(max_steps=args.max_steps, animate=args.animate)
+
+if __name__ == "__main__":
+    main()

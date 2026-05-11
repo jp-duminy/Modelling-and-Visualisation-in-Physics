@@ -339,7 +339,7 @@ class MonteCarloPotts:
 
     def initialise_grid(self, lattice_config: str = 'random') -> np.ndarray:
         """
-        Generate a grid according to the user-defined configuration..
+        Generate a grid according to the user-defined configuration.
         """
         if lattice_config == 'random':
             self.lattice = np.random.randint(0, self.q, size=(self.N, self.N)) # remember dtype=int
