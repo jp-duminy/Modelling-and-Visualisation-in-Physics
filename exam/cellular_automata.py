@@ -85,6 +85,12 @@ def eight_state_neighbours(grid: np.ndarray, state: int) -> np.ndarray:
 
     return neighbour_sum
 
+def type_field(fields: tuple[np.ndarray, ...]) -> np.ndarray:
+    """
+    For each lattice site, finds the dominant species across the fields.
+    """
+    return np.argmax(np.stack(fields), axis=0)
+
 @njit
 def sirs_sweep(grid: np.ndarray, N: int, p1: float, p2: float, 
                p3: float) -> None:

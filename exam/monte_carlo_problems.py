@@ -396,6 +396,12 @@ class MonteCarloPotts:
         self.im.set_data(self.lattice)
         self.ax.set_title(r"$N_{sweeps} = $" + f"{self.iters}")
         return [self.im]
+
+    def fraction_in_state(self, state: int) -> int:
+        """
+        Computes fraction of the lattice in a specific state.
+        """
+        return np.sum(self.lattice == state) / self.N**2
     
     @staticmethod
     def calculate_observables(order: np.ndarray, energy: np.ndarray, n_sites: int, beta: float) -> tuple[np.ndarray, ...]:
