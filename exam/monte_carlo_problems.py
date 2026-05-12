@@ -10,6 +10,7 @@ I like to work with classes, so I will make a bootstrap error class and a specif
 import numpy as np 
 from numba import njit, prange
 import pandas
+from scipy.signal import correlate
 
 import argparse
 from time import perf_counter
@@ -147,6 +148,24 @@ def kawasaki_sweep(lattice: np.ndarray, N: int, beta: float) -> None:
         delta_E, pos1, pos2 = kawasaki_selection(lattice, N)
         if metropolis_acceptance(delta_E, beta):
             lattice[pos1], lattice[pos2] = lattice[pos2], lattice[pos1]
+
+def autocorrelation(data: np.ndarray):
+    """
+    Computes the normalised autocorrelation times and decorrelation time of an array.
+    Uses scipy.signal which uses FFT for O(Nlog(N)) complexity (numpy is O(N^2)).
+    """
+    corrected_data = data - np.mean(data) # eq 1.29 lecture notes 1
+    lag_times = correlate(corrected_data, corrected_data, mode='full')
+    autocorrelation_time = lag_times[(len(data)-1):] # lag_times is length 2n-1 and middle value (lag 0) occurs at n-1
+    normalised_autocorrelation_times = autocorrelation_time / autocorrelation_time[0]
+    mask = (normalised_autocorrelation_times < 1/np.e)
+    if ~np.any(mask):
+        print(f"No decorrelation time.")
+        return normalised_autocorrelation_times
+    # tau is first lag where the normalised autocorrelation time < 1/e
+    tau = np.where(mask)[0][0] # np.where returns tuple containing arrays
+
+    return tau, normalised_autocorrelation_times
 
 #
 # potts model (kawasaki doesn't work)
