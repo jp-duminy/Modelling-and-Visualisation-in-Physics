@@ -279,6 +279,46 @@ def apply_neumann_bc_3D(f: np.ndarray, dx: float, val: float = 0.0) -> None:
     f[:,:,0] = f[:,:,1] + val*dx 
     f[:,:,-1] = f[:,:,-2] + val*dx
 
+def apply_dirichlet_bc_2D(f: np.ndarray, edge: str, val: float = 0.0):
+    """
+    Dirichlet on a single edge.
+    """
+    if edge == 'left':    f[0, :] = val
+    elif edge == 'right': f[-1, :] = val
+    elif edge == 'bottom': f[:, 0] = val
+    elif edge == 'top':    f[:, -1] = val
+
+def apply_neumann_bc_2D(f: np.ndarray, edge: str, dx: float, val: float = 0.0):
+    """
+    Neumann (df/dn = val) on a single edge.
+    """
+    if edge == 'left':    f[0, :] = f[1, :] + val * dx
+    elif edge == 'right': f[-1, :] = f[-2, :] + val * dx
+    elif edge == 'bottom': f[:, 0] = f[:, 1] + val * dx
+    elif edge == 'top':    f[:, -1] = f[:, -2] + val * dx
+
+def apply_dirichlet_bc_3D(f: np.ndarray, edge: str, val: float = 0.0):
+    """
+    Dirichlet on a single face.
+    """
+    if edge == 'left':    f[0, :, :] = val
+    elif edge == 'right': f[-1, :, :] = val
+    elif edge == 'bottom': f[:, 0, :] = val
+    elif edge == 'top':    f[:, -1, :] = val
+    elif edge == 'front':  f[:, :, 0] = val
+    elif edge == 'back':   f[:, :, -1] = val
+
+def apply_neumann_bc_3D(f: np.ndarray, edge: str, dx: float, val: float = 0.0):
+    """
+    Neumann (df/dn = val) on a single face.
+    """
+    if edge == 'left':    f[0, :, :] = f[1, :, :] + val * dx
+    elif edge == 'right': f[-1, :, :] = f[-2, :, :] + val * dx
+    elif edge == 'bottom': f[:, 0, :] = f[:, 1, :] + val * dx
+    elif edge == 'top':    f[:, -1, :] = f[:, -2, :] + val * dx
+    elif edge == 'front':  f[:, :, 0] = f[:, :, 1] + val * dx
+    elif edge == 'back':   f[:, :, -1] = f[:, :, -2] + val * dx
+
 def spatial_integral(f: np.ndarray, dx: float) -> float:
     """
     Integrates over the grid by approximating each cell's area.
